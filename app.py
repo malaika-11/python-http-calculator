@@ -1,88 +1,99 @@
 #!/usr/bin/env python3
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
 from urllib.parse import urlparse, parse_qs
+import json
+
 
 class CalculatorHandler(BaseHTTPRequestHandler):
-    def get_inputs(self, query_params):
-        """Helper to safely get 'a' and 'b' from query parameters."""
-        try:
-            # Safely grab the first element from the query parameter lists
-            a_raw = query_params.get('a', ['0'])[0]
-            b_raw = query_params.get('b', ['0'])[0]
-            
-            a = int(a_raw) if '.' not in a_raw else float(a_raw)
-            b = int(b_raw) if '.' not in b_raw else float(b_raw)
-            
-            return a, b, None
-        except ValueError:
-            return None, None, "Parameters 'a' and 'b' must be valid numbers."
 
-    def send_json_response(self, data, status_code=200):
-        """Helper to format and send JSON responses."""
-        self.send_response(status_code)
-        self.send_header('Content-Type', 'application/json')
+    def send_json(self, data, status=200):
+        response = json.dumps(data, indent=4).encode("utf-8")
+
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
+
+        self.wfile.write(response)
+
+    def get_numbers(self, params):
+        try:
+            a = float(params["a"][0])
+            b = float(params["b"][0])
+
+            # Convert whole numbers back to int for cleaner output
+            if a.is_integer():
+                a = int(a)
+            if b.is_integer():
+                b = int(b)
+
+            return a, b
+
+        except KeyError:
+            raise ValueError("Both 'a' and 'b' parameters are required.")
+        except ValueError:
+            raise ValueError("'a' and 'b' must be valid numbers.")
 
     def do_GET(self):
-        # Parse the URL paths and query parameters
-        parsed_url = urlparse(self.path)
-        path = parsed_url.path
-        query_params = parse_qs(parsed_url.query)
-        
-        # Define valid routes
-        valid_paths = ['/add', '/sub', '/multiply', '/divide']
-        
-        if path not in valid_paths:
-            error_message = "Endpoint '{}' not found.".format(path)
-            self.send_json_response({"error": error_message}, 404)
-            return
+        parsed = urlparse(self.path)
+        path = parsed.path
+        params = parse_qs(parsed.query)
 
-        # Extract numeric arguments
-        a, b, error = self.get_inputs(query_params)
-        if error:
-            self.send_json_response({"error": error}, 400)
-            return
-
-        # Perform operations based on the path
-        if path == '/add':
-            result = a + b
-            operation = "addition"
-        elif path == '/sub':
-            result = a - b
-            operation = "subtraction"
-        elif path == '/multiply':
-            result = a * b
-            operation = "multiplication"
-        elif path == '/divide':
-            if b == 0:
-                self.send_json_response({"error": "Cannot divide by zero."}, 400)
-                return
-            result = a / b
-            operation = "division"
-
-        # Build final JSON output to match assignment requirements
-        response_data = {
-            "a": a,
-            "b": b,
-            "operation": operation,
-            "result": result
+        operations = {
+            "/add": ("addition", lambda a, b: a + b),
+            "/sub": ("subtraction", lambda a, b: a - b),
+            "/multiply": ("multiplication", lambda a, b: a * b),
+            "/divide": ("division", lambda a, b: a / b)
         }
-        
-        self.send_json_response(response_data)
+
+        if path not in operations:
+            self.send_json(
+                {"error": f"Endpoint '{path}' not found."},
+                404
+            )
+            return
+
+        try:
+            a, b = self.get_numbers(params)
+
+            if path == "/divide" and b == 0:
+                self.send_json(
+                    {"error": "Cannot divide by zero."},
+                    400
+                )
+                return
+
+            operation_name, operation_func = operations[path]
+            result = operation_func(a, b)
+
+            if isinstance(result, float) and result.is_integer():
+                result = int(result)
+
+            self.send_json({
+                "a": a,
+                "b": b,
+                "operation": operation_name,
+                "result": result
+            })
+
+        except ValueError as e:
+            self.send_json({"error": str(e)}, 400)
+
 
 def run():
-    # Set to 0.0.0.0 so the server can bridge outside a Docker container
-    server_address = ('0.0.0.0', 5000)
-    httpd = HTTPServer(server_address, CalculatorHandler)
-    print("Built-in server running on port 5000...")
+    HOST = "0.0.0.0"
+    PORT = 8080
+
+    server = HTTPServer((HOST, PORT), CalculatorHandler)
+
+    print(f"Calculator API running at http://localhost:{PORT}")
+
     try:
-        httpd.serve_forever()
+        server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping server...")
-        httpd.server_close()
+        print("\nServer stopped.")
+        server.server_close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     run()
-
